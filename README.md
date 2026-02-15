@@ -3,28 +3,28 @@
 Shrink the size of any PyTorch model in a single click!
 
 ## Project Goal
-this project aims to build a one-click universal model compression tool designed to shrink pytorch models for real-time edge deployment on hardware like the Raspberry Pi 4. while the pi 4 can hold 100-500mb models in its 2-8gb RAM, we target a post-quantization footprint of 50mb or less to guarantee low-latency inference.
 
-we are prioritizing a pipeline that balances aggressive size reduction with performance stability, starting with int8 quantization as our primary lever.
+This project aims to build a **one-click universal model compression tool** designed to shrink PyTorch models for real-time edge deployment on hardware like the Raspberry Pi 4. While the Pi 4 can hold 100–500MB models in its 2–8GB RAM, we target a post-compression footprint of **50MB or less** to guarantee low-latency inference. 
 
----
-
-**the four levels of compression**
-1. quantization (int8): our starting point. we utilize quantization-aware training (qat) on a provided dataset to secure massive size reductions while preserving accuracy by simulating quantization errors during fine-tuning.
-
-2. structural pruning: unlike unstructured methods, this physically removes network blocks (entire filters or channels). this is the only pruning strategy that genuinely reduces RAM usage and compute operations on ARM architectures.
-
-3. low-rank factorization: this stage uses the best rank-r approximation in the frobenius norm to decompose large weight matrices into smaller, more efficient products.
-
-4. logit distillation: as a final safety measure, we use kl divergence to align
-   the compressed student model's logits with the original teacher model,
-   recovering accuracy lost during the previous three stages.
+We are prioritizing a pipeline that balances aggressive size reduction with performance stability, starting with **INT8 Quantization** as our primary lever.
 
 ---
 
-**technical constraints & hardware notes**
-- target hardware: Raspberry Pi 4 / ARM Cortex-A72.
-- inference footprint: < 50mb for real-time performance.
+## The Four Levels of Compression
+
+1.  **Quantization (INT8):** Our starting point. We utilize **Quantization-Aware Training (QAT)** on a provided dataset to secure massive size reductions while preserving accuracy by simulating quantization errors during fine-tuning.
+2.  **Structural Pruning:** Unlike unstructured methods, this physically removes network blocks (entire filters or channels). This is the only pruning strategy that genuinely reduces RAM usage and compute operations on ARM architectures.
+3.  **Low-Rank Factorization:** This stage uses the best **Rank-R Approximation** in the Frobenius norm to decompose large weight matrices into smaller, more efficient products.
+4.  **Logit Distillation:** As a final safety measure, we use **KL Divergence** to align the compressed student model's logits with the original teacher model, recovering accuracy lost during the previous three stages.
+
+---
+
+## Technical Constraints & Hardware Notes
+
+* **Target Hardware:** Raspberry Pi 4 / ARM Cortex-A72.
+* **Inference Footprint:** < 50MB for real-time performance.
+* **Agnostic Design:** The goal is to build a process compatible with any model
+  architecture, including bespoke ones, without requiring external libraries.
 
 ---
 

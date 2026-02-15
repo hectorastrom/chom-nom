@@ -1,1 +1,4 @@
 .venv
+weights
+**/__pycache__
+data

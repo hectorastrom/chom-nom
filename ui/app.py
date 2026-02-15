@@ -54,17 +54,19 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Chomnom")
-        self.setMinimumSize(560, 560)
-        self.resize(600, 600)
+        self.setFixedSize(600, 560)
         self.setStyleSheet(styles.main_window_stylesheet())
 
         self._worker_thread: QThread | None = None
 
         central = QWidget()
+        central.setObjectName("central_surface")
+        central.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        central.setStyleSheet(f"QWidget#central_surface {{ background-color: {styles.BG_DEEP}; }}")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(40, 28, 40, 24)
-        root.setSpacing(20)
+        root.setContentsMargins(40, 24, 40, 12)
+        root.setSpacing(16)
 
         # ── Header — centered logo ─────────────────────────────
         logo_label = QLabel()
@@ -105,8 +107,6 @@ class MainWindow(QMainWindow):
         # ── Info panel ─────────────────────────────────────────
         self._info_panel = InfoPanel()
         root.addWidget(self._info_panel)
-
-        root.addStretch()
 
         # ── Signal wiring ──────────────────────────────────────
         self._dataset_blob.file_accepted.connect(self._on_file_changed)

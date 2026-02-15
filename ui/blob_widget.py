@@ -64,6 +64,7 @@ class BlobDropWidget(QWidget):
         self._file_description = file_description
         self._state = BlobState.RESTING
         self._accepted_path: str | None = None
+        self._is_hovered = False
 
         self._pixmap = chomnom_scaled(chomnom_idle(), _IMG_SIZE)
 
@@ -77,6 +78,7 @@ class BlobDropWidget(QWidget):
 
         self.setAcceptDrops(True)
         self.setFixedSize(200, 210)
+        self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
 
         self._setup_idle_animation()
@@ -211,9 +213,33 @@ class BlobDropWidget(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         if self._accepted_path and self._state != BlobState.CHEWING:
-            self._accepted_path = None
-            self._animate_to_state(BlobState.RESTING)
-            self.file_cleared.emit()
+            self._clear_selected_file()
+
+    def enterEvent(self, event):
+        self._is_hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._is_hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._accepted_path
+            and self._state != BlobState.CHEWING
+        ):
+            self._clear_selected_file()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def _clear_selected_file(self):
+        self._accepted_path = None
+        self._animate_to_state(BlobState.RESTING)
+        self.file_cleared.emit()
 
     # ── Painting ───────────────────────────────────────────────
 
@@ -251,6 +277,32 @@ class BlobDropWidget(QWidget):
 
         p.setPen(pen)
         p.drawRoundedRect(zone_rect, 14, 14)
+
+        # Hover affordance for clearing an attached file
+        if self._accepted_path and self._is_hovered and self._state != BlobState.CHEWING:
+            close_r = 11
+            close_cx = zone_rect.right() - 14
+            close_cy = zone_rect.top() + 14
+            close_rect = QRectF(close_cx - close_r, close_cy - close_r, close_r * 2, close_r * 2)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 0, 0, 130))
+            p.drawEllipse(close_rect)
+
+            x_pen = QPen(QColor(styles.TEXT_PRIMARY), 1.8)
+            p.setPen(x_pen)
+            inset = 5
+            p.drawLine(
+                int(close_rect.left() + inset),
+                int(close_rect.top() + inset),
+                int(close_rect.right() - inset),
+                int(close_rect.bottom() - inset),
+            )
+            p.drawLine(
+                int(close_rect.right() - inset),
+                int(close_rect.top() + inset),
+                int(close_rect.left() + inset),
+                int(close_rect.bottom() - inset),
+            )
 
         # ── Chomnom image ──────────────────────────────────────
         cx = w / 2

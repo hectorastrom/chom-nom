@@ -17,19 +17,20 @@ from PyQt6.QtWidgets import QWidget
 from . import styles
 from .resources import chomnom_closed, chomnom_idle, chomnom_open, chomnom_scaled
 
-# Chomnom image size within the widget
-_IMG_SIZE = 140
+_IMG_SIZE = 120
 
 
 class BlobState(Enum):
     RESTING = auto()
     HOVER = auto()
+    REJECTED = auto()
     ACCEPTED = auto()
 
 
 _STATE_PIXMAP = {
     BlobState.RESTING: chomnom_idle,
     BlobState.HOVER: chomnom_open,
+    BlobState.REJECTED: chomnom_idle,
     BlobState.ACCEPTED: chomnom_closed,
 }
 
@@ -52,16 +53,14 @@ class BlobDropWidget(QWidget):
         self._state = BlobState.RESTING
         self._accepted_path: str | None = None
 
-        # Cached scaled pixmaps
         self._pixmap = chomnom_scaled(chomnom_idle(), _IMG_SIZE)
 
         # Animated property backing fields
         self._body_scale = 1.0
-        self._glow_opacity = 0.0
         self._bounce_offset = 0.0
 
         self.setAcceptDrops(True)
-        self.setFixedSize(200, 200)
+        self.setFixedSize(200, 210)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
 
         self._setup_idle_animation()
@@ -76,15 +75,6 @@ class BlobDropWidget(QWidget):
         self.update()
 
     body_scale = pyqtProperty(float, _get_body_scale, _set_body_scale)
-
-    def _get_glow_opacity(self) -> float:
-        return self._glow_opacity
-
-    def _set_glow_opacity(self, v: float):
-        self._glow_opacity = v
-        self.update()
-
-    glow_opacity = pyqtProperty(float, _get_glow_opacity, _set_glow_opacity)
 
     def _get_bounce_offset(self) -> float:
         return self._bounce_offset
@@ -124,16 +114,17 @@ class BlobDropWidget(QWidget):
         self._pixmap = chomnom_scaled(_STATE_PIXMAP[state](), _IMG_SIZE)
 
         targets = {
-            BlobState.RESTING: {"body_scale": 1.0, "glow_opacity": 0.0},
-            BlobState.HOVER: {"body_scale": 1.1, "glow_opacity": 0.7},
-            BlobState.ACCEPTED: {"body_scale": 1.0, "glow_opacity": 0.25},
+            BlobState.RESTING: {"body_scale": 1.0},
+            BlobState.HOVER: {"body_scale": 1.08},
+            BlobState.REJECTED: {"body_scale": 0.95},
+            BlobState.ACCEPTED: {"body_scale": 1.0},
         }
 
         vals = targets[state]
         group = QParallelAnimationGroup(self)
         for prop_name, target_val in vals.items():
             anim = QPropertyAnimation(self, prop_name.encode(), self)
-            anim.setDuration(250)
+            anim.setDuration(200)
             anim.setEndValue(target_val)
             anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
             group.addAnimation(anim)
@@ -141,14 +132,20 @@ class BlobDropWidget(QWidget):
 
     # ── Drag and drop ──────────────────────────────────────────
 
+    def _matches_filter(self, path: str) -> bool:
+        return path.endswith(self._file_filter)
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
+            # Always accept so we can show accept/reject feedback
+            event.acceptProposedAction()
             for url in event.mimeData().urls():
-                path = url.toLocalFile()
-                if path.endswith(self._file_filter):
-                    event.acceptProposedAction()
+                if self._matches_filter(url.toLocalFile()):
                     self._animate_to_state(BlobState.HOVER)
                     return
+            # No matching files — show rejected
+            self._animate_to_state(BlobState.REJECTED)
+            return
         event.ignore()
 
     def dragLeaveEvent(self, event):
@@ -158,12 +155,15 @@ class BlobDropWidget(QWidget):
     def dropEvent(self, event):
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.endswith(self._file_filter):
+            if self._matches_filter(path):
                 self._accepted_path = path
                 self._animate_to_state(BlobState.ACCEPTED)
                 self.file_accepted.emit(path)
                 event.acceptProposedAction()
                 return
+        # Wrong file type — snap back
+        prev = BlobState.ACCEPTED if self._accepted_path else BlobState.RESTING
+        self._animate_to_state(prev)
         event.ignore()
 
     def mouseDoubleClickEvent(self, event):
@@ -180,43 +180,63 @@ class BlobDropWidget(QWidget):
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         w = self.width()
-        img_area_h = self.height() - 50  # reserve space for labels
+        label_space = 44
+        zone_h = self.height() - label_space
+        zone_rect = QRectF(4, 4, w - 8, zone_h - 8)
 
-        # Center point for the image area
+        # ── Drop zone background with dashed/solid border ──────
+        p.setBrush(QColor(styles.BG_CARD))
+
+        if self._state == BlobState.ACCEPTED:
+            pen = QPen(QColor(styles.ACCENT_SUCCESS), 2)
+            pen.setStyle(Qt.PenStyle.SolidLine)
+        elif self._state == BlobState.HOVER:
+            pen = QPen(QColor(styles.ACCENT_PRIMARY), 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            pen.setDashPattern([6, 4])
+        elif self._state == BlobState.REJECTED:
+            pen = QPen(QColor("#ef4444"), 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            pen.setDashPattern([6, 4])
+        else:
+            pen = QPen(QColor(styles.TEXT_DISABLED), 1.5)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            pen.setDashPattern([6, 4])
+
+        p.setPen(pen)
+        p.drawRoundedRect(zone_rect, 14, 14)
+
+        # ── Chomnom image ──────────────────────────────────────
         cx = w / 2
-        cy = img_area_h / 2 + self._bounce_offset
+        cy = zone_h / 2 + self._bounce_offset
 
         p.save()
         p.translate(cx, cy)
         p.scale(self._body_scale, self._body_scale)
 
-        # Glow ring behind the image
-        if self._glow_opacity > 0.01:
-            glow_color = QColor(styles.ACCENT_GLOW)
-            glow_color.setAlphaF(min(self._glow_opacity * 0.5, 1.0))
-            glow_pen = QPen(glow_color, 6)
-            p.setPen(glow_pen)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            r = _IMG_SIZE / 2 + 4
-            p.drawEllipse(QRectF(-r, -r, r * 2, r * 2))
-
-        # Draw the chomnom image centered
         pm = self._pixmap
-        p.drawPixmap(
-            int(-pm.width() / 2),
-            int(-pm.height() / 2),
-            pm,
-        )
+        p.drawPixmap(int(-pm.width() / 2), int(-pm.height() / 2), pm)
+
+        # Gray overlay for rejected state
+        if self._state == BlobState.REJECTED:
+            overlay = QColor(0, 0, 0, 120)
+            p.setBrush(overlay)
+            p.setPen(Qt.PenStyle.NoPen)
+            r = pm.width() / 2
+            p.drawEllipse(QRectF(-r, -r, r * 2, r * 2))
 
         p.restore()
 
-        # Label text below image
+        # ── Labels below the drop zone ─────────────────────────
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
         font = QFont(styles.font_family())
         font.setPointSize(styles.FONT_SIZE_BLOB_LABEL)
         font.setWeight(QFont.Weight.DemiBold)
         p.setFont(font)
 
-        label_y = img_area_h + 4
+        label_y = zone_h + 2
         label_rect = QRectF(0, label_y, w, 18)
 
         if self._accepted_path:

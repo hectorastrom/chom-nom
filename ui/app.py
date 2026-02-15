@@ -1,5 +1,7 @@
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QPixmap
+from pathlib import Path
+
+from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -16,13 +18,49 @@ from .info_panel import InfoPanel
 from .resources import chomnom_idle, chomnom_scaled
 
 
+# ── Compression worker (runs in background thread) ────────────
+
+
+class _CompressionWorker(QObject):
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+    progress = pyqtSignal(str)
+
+    def __init__(self, model_path: str, dataset_path: str):
+        super().__init__()
+        self._model_path = model_path
+        self._dataset_path = dataset_path
+
+    def run(self):
+        try:
+            self.progress.emit("Loading model and dataset...")
+            from compression.compress import compress_and_evaluate
+
+            output_dir = str(Path(self._model_path).parent / "compressed")
+            self.progress.emit("Running INT8 quantization...")
+
+            results = compress_and_evaluate(
+                model_path=self._model_path,
+                dataset_path=self._dataset_path,
+                output_dir=output_dir,
+            )
+            self.finished.emit(results)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+# ── Main window ───────────────────────────────────────────────
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Chomnom Model Compressor")
-        self.setMinimumSize(780, 660)
-        self.resize(800, 680)
+        self.setWindowTitle("One-Click-Compress")
+        self.setMinimumSize(780, 680)
+        self.resize(800, 700)
         self.setStyleSheet(styles.main_window_stylesheet())
+
+        self._worker_thread: QThread | None = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -105,8 +143,8 @@ class MainWindow(QMainWindow):
 
         self._dataset_blob = BlobDropWidget(
             label="Dataset",
-            file_filter=".py",
-            file_description=".py file",
+            file_filter=".pt",
+            file_description=".pt file",
         )
         blobs_layout.addWidget(self._dataset_blob)
 
@@ -141,10 +179,13 @@ class MainWindow(QMainWindow):
         self._model_blob.file_cleared.connect(self._on_model_cleared)
         self._compress_btn.clicked.connect(self._on_compress)
 
+    # ── Readiness check ────────────────────────────────────────
+
     def _check_readiness(self):
         has_dataset = self._dataset_blob._accepted_path is not None
         has_model = self._model_blob._accepted_path is not None
-        self._compress_btn.set_ready(has_dataset and has_model)
+        is_running = self._worker_thread is not None and self._worker_thread.isRunning()
+        self._compress_btn.set_ready(has_dataset and has_model and not is_running)
 
     def _on_file_changed(self, *_args):
         self._check_readiness()
@@ -157,9 +198,42 @@ class MainWindow(QMainWindow):
         self._info_panel.clear_info()
         self._check_readiness()
 
+    # ── Compression ────────────────────────────────────────────
+
     def _on_compress(self):
         dataset = self._dataset_blob._accepted_path
         model = self._model_blob._accepted_path
-        print(f"[COMPRESS] Dataset: {dataset}")
-        print(f"[COMPRESS] Model:   {model}")
-        print("[COMPRESS] Running INT8 quantization... (stub)")
+        if not dataset or not model:
+            return
+
+        # Disable button and show progress
+        self._compress_btn.set_ready(False)
+        self._compress_btn.setText("COMPRESSING...")
+        self._info_panel.show_progress("Starting compression pipeline...")
+
+        # Launch worker thread
+        self._worker_thread = QThread()
+        self._worker = _CompressionWorker(model, dataset)
+        self._worker.moveToThread(self._worker_thread)
+
+        self._worker_thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._on_compress_progress)
+        self._worker.finished.connect(self._on_compress_finished)
+        self._worker.error.connect(self._on_compress_error)
+        self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+
+        self._worker_thread.start()
+
+    def _on_compress_progress(self, message: str):
+        self._info_panel.show_progress(message)
+
+    def _on_compress_finished(self, results: dict):
+        self._compress_btn.setText("COMPRESS")
+        self._check_readiness()
+        self._info_panel.show_results(results)
+
+    def _on_compress_error(self, message: str):
+        self._compress_btn.setText("COMPRESS")
+        self._check_readiness()
+        self._info_panel.show_error(message)

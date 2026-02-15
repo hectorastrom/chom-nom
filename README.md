@@ -1,6 +1,9 @@
-# One-Click-Compress
+# Chom, Nom!
 
-Shrink the size of any PyTorch model in a single click!
+### Shrink the size of any PyTorch model in a single click!
+
+![chom nom logo](logo.png)
+
 
 ## Project Goal
 

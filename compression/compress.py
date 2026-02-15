@@ -446,6 +446,8 @@ def compress_and_evaluate(
     return {
         "int8_pt2": int8_pt2,
         "pte": pte,
+        "fp32_size_mb": fp32_mb,
+        "pte_size_mb": pte_mb,
         "size_delta_mb": size_delta_mb,
         "size_delta_pct": size_delta_pct,
         **metrics,

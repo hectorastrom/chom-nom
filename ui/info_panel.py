@@ -54,18 +54,14 @@ class InfoPanel(QWidget):
             self._estimate_label.setText("")
 
     def show_results(self, results: dict):
-        # Size info — compute from output file paths
+        # Size info — use pre-computed sizes from the pipeline
+        fp32_mb = results.get("fp32_size_mb", 0)
+        pte_mb = results.get("pte_size_mb", 0)
         delta_pct = results.get("size_delta_pct", 0)
-        pte_path = results.get("pte", "")
-        int8_path = results.get("int8_pt2", "")
-
-        # Compute actual file sizes from paths
-        pte_mb = _file_size_mb(pte_path)
-        int8_mb = _file_size_mb(int8_path)
 
         size_parts = []
-        if int8_mb > 0:
-            size_parts.append(f"PT2: {int8_mb:.1f} MB")
+        if fp32_mb > 0:
+            size_parts.append(f"PT2: {fp32_mb:.1f} MB")
         if pte_mb > 0:
             size_parts.append(f"PTE: {pte_mb:.1f} MB")
         if delta_pct != 0:

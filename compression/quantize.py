@@ -5,8 +5,11 @@
 
 # Quantize any fp32 .pt2 checkpoint to INT8 via the PT2E flow
 
+from pathlib import Path
+
 import torch
 import torch.export
+from torch.utils.data import Dataset, DataLoader
 from torchao.quantization.pt2e.quantize_pt2e import prepare_pt2e, convert_pt2e
 from executorch.backends.xnnpack.quantizer.xnnpack_quantizer import (
     XNNPACKQuantizer,
@@ -16,16 +19,36 @@ from executorch.backends.xnnpack.quantizer.xnnpack_quantizer import (
 
 def universal_compress(
     model_path: str,
-    calibration_data: list[torch.Tensor],
+    calibration_dataset: Dataset,
     output_path: str = "compressed_model.pt2",
+    batch_size: int = 1,
+    num_calibration_batches: int = 10,
 ):
     """Load a .pt2 exported model, quantize it to INT8 via PT2E, and save.
 
+    Accepts any torch Dataset that yields (x, y) tuples. Only x is used
+    for calibration; y is ignored but keeps the interface consistent with
+    standard supervised datasets.
+
     Args:
         model_path: Path to a .pt2 file produced by torch.export.save().
-        calibration_data: List of input tensors for calibration (~ 10 batches).
+        calibration_dataset: A torch Dataset returning (x, y) per sample.
         output_path: Where to write the quantized .pt2 file.
+        batch_size: Batch size for the calibration DataLoader.
+        num_calibration_batches: How many batches to run through the model
+            for observer calibration (default 10).
     """
+    # 0. VALIDATE -- catch the most common mistake early
+    model_p = Path(model_path)
+    if not model_p.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    if model_p.suffix != ".pt2":
+        raise ValueError(
+            f"Expected a .pt2 exported program, got '{model_p.suffix}' file: "
+            f"{model_path}\n"
+            "Hint: export your model first with compression.utils.save_torch_export()."
+        )
+
     print(f"Loading {model_path}...")
     # 1. LOAD -- universal load without needing original class definitions
     ep = torch.export.load(model_path)
@@ -49,12 +72,19 @@ def universal_compress(
     print("Preparing for quantization...")
     prepared_model = prepare_pt2e(model, quantizer)
 
-    # 4. CALIBRATION -- run data so observers record min/max values
-    print(f"Calibrating on {min(len(calibration_data), 10)} batches...")
+    # 4. CALIBRATION -- wrap dataset in a DataLoader and feed x through model
+    calibration_loader = DataLoader(
+        calibration_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+    )
+    num_batches = min(len(calibration_loader), num_calibration_batches)
+    print(f"Calibrating on {num_batches} batches (batch_size={batch_size})...")
+
     with torch.no_grad():
-        for i, batch in enumerate(calibration_data):
-            prepared_model(batch)
-            if i >= 9:
+        for i, (x, _y) in enumerate(calibration_loader):
+            prepared_model(x)
+            if i >= num_calibration_batches - 1:
                 break
 
     # 5. CONVERT -- swap FP32 ops for INT8 ops and bake in the scales
@@ -63,8 +93,8 @@ def universal_compress(
 
     # 6. SAVE -- re-export then save as .pt2
     print("Re-exporting quantized model...")
-    example_input = calibration_data[0]
-    quantized_ep = torch.export.export(quantized_model, (example_input,))
+    example_x, _example_y = next(iter(calibration_loader))
+    quantized_ep = torch.export.export(quantized_model, (example_x,))
     torch.export.save(quantized_ep, output_path)
     print(f"Quantized model saved to {output_path}")
 

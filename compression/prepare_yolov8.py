@@ -19,11 +19,12 @@ from pathlib import Path
 
 import torch
 import torchvision.transforms as T
+from torch.utils.data import Dataset
 from PIL import Image
 from ultralytics import YOLO
 
 from compression.quantize import universal_compress
-from compression.utils import save_torch_export
+from compression.utils import save_dataset, save_torch_export
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -35,6 +36,7 @@ COCO128_IMAGES = COCO128_DIR / "images" / "train2017"
 YOLO_PT = WEIGHTS_DIR / "yolov8s.pt"
 YOLO_PT2 = WEIGHTS_DIR / "yolov8s.pt2"
 YOLO_INT8_PT2 = WEIGHTS_DIR / "yolov8s_int8.pt2"
+COCO128_DATASET_PT = DATA_DIR / "coco128_calibration.pt"
 COCO128_URL = (
     "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip"
 )
@@ -86,39 +88,48 @@ def download_coco128() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Step 2 -- Build calibration tensors
+# Step 2 -- Calibration dataset
 # ---------------------------------------------------------------------------
 
-def build_calibration_data(
-    image_dir: Path,
-    num_images: int = 16,
-    image_size: int = 640,
-) -> list[torch.Tensor]:
-    """Load images from a directory and return a list of preprocessed tensors.
+class Coco128Dataset(Dataset):
+    """COCO128 image dataset returning (x, y) tuples.
 
-    Each tensor has shape (1, 3, image_size, image_size) with values in [0, 1],
-    matching what YOLOv8 expects for inference.
+    x is a preprocessed float tensor of shape (3, H, W) in [0, 1].
+    y is the integer index of the image (dummy label -- COCO128 is only
+    used here for calibration, so the label is not meaningful).
+
+    Args:
+        image_dir: Directory containing .jpg images.
+        num_images: Maximum number of images to include.
+        image_size: Resize target (square).
     """
-    transform = T.Compose([
-        T.Resize((image_size, image_size)),
-        T.ToTensor(),  # HWC uint8 -> CHW float [0, 1]
-    ])
 
-    image_paths = sorted(image_dir.glob("*.jpg"))[:num_images]
-    if not image_paths:
-        raise FileNotFoundError(
-            f"No .jpg images found in {image_dir}. "
-            "Run the download step first."
-        )
+    def __init__(
+        self,
+        image_dir: Path,
+        num_images: int = 16,
+        image_size: int = 640,
+    ):
+        self.image_paths = sorted(image_dir.glob("*.jpg"))[:num_images]
+        if not self.image_paths:
+            raise FileNotFoundError(
+                f"No .jpg images found in {image_dir}. "
+                "Run the download step first."
+            )
+        self.transform = T.Compose([
+            T.Resize((image_size, image_size)),
+            T.ToTensor(),  # HWC uint8 -> CHW float [0, 1]
+        ])
+        print(f"Coco128Dataset: {len(self)} images from {image_dir}")
 
-    tensors: list[torch.Tensor] = []
-    for p in image_paths:
-        img = Image.open(p).convert("RGB")
-        tensor = transform(img).unsqueeze(0)  # (1, 3, H, W)
-        tensors.append(tensor)
+    def __len__(self) -> int:
+        return len(self.image_paths)
 
-    print(f"Built {len(tensors)} calibration tensors of shape {tensors[0].shape}")
-    return tensors
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        img = Image.open(self.image_paths[idx]).convert("RGB")
+        x = self.transform(img)  # (3, H, W)
+        y = idx  # dummy label for calibration
+        return x, y
 
 
 # ---------------------------------------------------------------------------
@@ -149,14 +160,14 @@ def export_yolov8_pt2() -> Path:
 # Step 4 -- Quantize
 # ---------------------------------------------------------------------------
 
-def quantize_yolov8(calibration_data: list[torch.Tensor]) -> Path:
+def quantize_yolov8(calibration_dataset: Dataset) -> Path:
     """Run the universal_compress pipeline on the exported .pt2."""
     print(f"\n{'='*50}")
     print("Running INT8 quantization pipeline")
     print(f"{'='*50}\n")
     output = universal_compress(
         model_path=str(YOLO_PT2),
-        calibration_data=calibration_data,
+        calibration_dataset=calibration_dataset,
         output_path=str(YOLO_INT8_PT2),
     )
     return Path(output)
@@ -193,7 +204,7 @@ def main():
     parser = argparse.ArgumentParser(description="YOLOv8 quantization test")
     parser.add_argument(
         "--step",
-        choices=["download", "export", "quantize", "all"],
+        choices=["download", "export", "dataset", "quantize", "all"],
         default="all",
         help="Which step to run (default: all)",
     )
@@ -206,9 +217,14 @@ def main():
     if args.step in ("export", "all"):
         export_yolov8_pt2()
 
+    # Build and (optionally) persist the calibration dataset
+    cal_dataset = None
+    if args.step in ("dataset", "quantize", "all"):
+        cal_dataset = Coco128Dataset(COCO128_IMAGES)
+        save_dataset(cal_dataset, str(COCO128_DATASET_PT))
+
     if args.step in ("quantize", "all"):
-        cal_data = build_calibration_data(COCO128_IMAGES)
-        result = quantize_yolov8(cal_data)
+        result = quantize_yolov8(cal_dataset)
         compare_sizes(YOLO_PT2, result)
 
     print("\nDone.")

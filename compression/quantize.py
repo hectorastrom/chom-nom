@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 import torch.export
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 from torchao.quantization.pt2e.quantize_pt2e import prepare_pt2e, convert_pt2e
 from executorch.backends.xnnpack.quantizer.xnnpack_quantizer import (
     XNNPACKQuantizer,
@@ -81,11 +82,35 @@ def universal_compress(
     num_batches = min(len(calibration_loader), num_calibration_batches)
     print(f"Calibrating on {num_batches} batches (batch_size={batch_size})...")
 
+    used_microbatch_fallback = False
     with torch.no_grad():
-        for i, (x, _y) in enumerate(calibration_loader):
-            prepared_model(x)
+        for i, (x, _y) in enumerate(
+            tqdm(
+                calibration_loader,
+                total=num_batches,
+                desc="Calibration",
+                unit="batch",
+            )
+        ):
+            try:
+                prepared_model(x)
+            except AssertionError as exc:
+                # Many exported programs are guarded on a fixed batch size of 1.
+                # Fall back to per-sample calibration so larger loader batches
+                # still work without failing the full pipeline.
+                if "x.size()[0] == 1" not in str(exc):
+                    raise
+                used_microbatch_fallback = True
+                for j in range(x.shape[0]):
+                    prepared_model(x[j:j + 1])
             if i >= num_calibration_batches - 1:
                 break
+
+    if used_microbatch_fallback:
+        print(
+            "Calibration batch guard detected; using per-sample fallback "
+            "(effective batch_size=1)."
+        )
 
     # 5. CONVERT -- swap FP32 ops for INT8 ops and bake in the scales
     print("Converting to INT8...")
@@ -93,7 +118,10 @@ def universal_compress(
 
     # 6. SAVE -- re-export then save as .pt2
     print("Re-exporting quantized model...")
-    example_x, _example_y = next(iter(calibration_loader))
+    example_x, _example_y = calibration_dataset[0]
+    if example_x.ndim == 3:
+        example_x = example_x.unsqueeze(0)
+    example_x = example_x.float()
     quantized_ep = torch.export.export(quantized_model, (example_x,))
     torch.export.save(quantized_ep, output_path)
     print(f"Quantized model saved to {output_path}")

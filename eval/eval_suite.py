@@ -18,6 +18,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 
 # Register quantized ops so INT8 .pt2 files can be loaded
 from torchao.quantization.pt2e.quantize_pt2e import (  # noqa: F401
@@ -108,6 +109,7 @@ def run_eval_suite(
 
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     max_samples = min(num_eval_samples, len(dataset))
+    total_batches = (max_samples + batch_size - 1) // batch_size
 
     cosine_scores: list[float] = []
     fp32_latencies_ms: list[float] = []
@@ -121,7 +123,12 @@ def run_eval_suite(
     sample_count = 0
 
     with torch.no_grad():
-        for x, y in loader:
+        for x, y in tqdm(
+            loader,
+            total=total_batches,
+            desc="Evaluation",
+            unit="batch",
+        ):
             if sample_count >= max_samples:
                 break
 
@@ -183,15 +190,15 @@ def run_eval_suite(
         sum(candidate_latencies_ms) / len(candidate_latencies_ms)
     )
     latency_delta_ms = candidate_latency_mean - fp32_latency_mean
-    latency_ratio = (
-        candidate_latency_mean / fp32_latency_mean
-        if fp32_latency_mean > 0
+    latency_speedup = (
+        fp32_latency_mean / candidate_latency_mean
+        if candidate_latency_mean > 0
         else 0.0
     )
     result["fp32_latency_ms_mean"] = fp32_latency_mean
     result["candidate_latency_ms_mean"] = candidate_latency_mean
     result["latency_delta_ms"] = latency_delta_ms
-    result["latency_ratio"] = latency_ratio
+    result["latency_speedup"] = latency_speedup
 
     if eval_cosine:
         if not cosine_scores:
@@ -210,8 +217,7 @@ def run_eval_suite(
             result["argmax_samples"] = argmax_count
             result["fp32_top1"] = fp32_top1
             result["candidate_top1"] = candidate_top1
-            result["argmax_agreement"] = agreement
-            result["argmax_delta"] = candidate_top1 - fp32_top1
+            result["argmax_agreement_pct"] = agreement * 100.0
         else:
             result["argmax_reason"] = argmax_reason
 

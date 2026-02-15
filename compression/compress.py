@@ -11,9 +11,7 @@ runs post-training quantization with calibration, lowers to a deployable
 .pte file, and runs the evaluation suite (cosine + argmax by default).
 
 Usage:
-    python -m compression.compress model.pt2 calibration.pt
-    python -m compression.compress model.pt2 calibration.pt --output-dir out/
-    python -m compression.compress model.pt2 calibration.pt --eval-samples 64
+    uv run -m compression.compress weights/resnet50.pt2 data/imagenette_calibration.pt --output-dir weights/
 """
 
 import argparse
@@ -277,8 +275,8 @@ def compress_and_evaluate(
     dataset_path: str,
     output_dir: str = ".",
     batch_size: int = 1,
-    num_calibration_batches: int = 10,
-    num_eval_samples: int = 32,
+    num_calibration_batches: int = 100,
+    num_eval_samples: int = 64,
     debug: bool = False,
 ) -> dict:
     """Quantize a .pt2 model, lower to .pte, and evaluate quality.
@@ -407,8 +405,8 @@ def compress_and_evaluate(
         indent=4,
     )
     _kv(
-        "Latency ratio (pte):",
-        f"{metrics['latency_ratio']:.3f}x",
+        "Latency speedup (pte):",
+        f"{metrics['latency_speedup']:.3f}x",
         indent=4,
     )
     if metrics.get("argmax_supported", False):
@@ -424,12 +422,7 @@ def compress_and_evaluate(
         )
         _kv(
             "Argmax agreement:",
-            f"{metrics['argmax_agreement']:.4f}",
-            indent=4,
-        )
-        _kv(
-            "Argmax delta (pte):",
-            f"{metrics['argmax_delta']:+.4f}",
+            f"{metrics['argmax_agreement_pct']:.2f}%",
             indent=4,
         )
     else:
@@ -492,7 +485,7 @@ def main():
     parser.add_argument(
         "--calibration-batches",
         type=int,
-        default=10,
+        default=100,
         help="Number of calibration batches (default: 10)",
     )
     parser.add_argument(

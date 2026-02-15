@@ -65,7 +65,7 @@ class InfoPanel(QWidget):
 
         size_parts = []
         if int8_mb > 0:
-            size_parts.append(f"INT8: {int8_mb:.1f} MB")
+            size_parts.append(f"PT2: {int8_mb:.1f} MB")
         if pte_mb > 0:
             size_parts.append(f"PTE: {pte_mb:.1f} MB")
         if delta_pct != 0:
